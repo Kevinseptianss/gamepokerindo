@@ -1,5 +1,5 @@
 import { HandEvaluator } from './HandEvaluator.js';
-// ACTIONS are already imported above
+import { GAME_PHASES, ACTIONS } from './PokerGame.js';
 
 export class AIPlayer {
     constructor(aggressiveness = 0.5, bluffFrequency = 0.1) {

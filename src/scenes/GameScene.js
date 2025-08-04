@@ -208,8 +208,8 @@ export default class GameScene extends Phaser.Scene {
             button.on('pointerover', () => { button.setFillStyle(actionData.hoverColor); this.tweens.add({ targets: [button, text], scale: 1.05, duration: 150 }); });
             button.on('pointerout', () => { button.setFillStyle(actionData.color); this.tweens.add({ targets: [button, text], scale: 1, duration: 150 }); });
             button.on('pointerdown', () => this.tweens.add({ targets: [button, text], scale: 0.95, duration: 100, onComplete: () => this.handlePlayerAction(actionData.action) }));
-            button.on('pointerup', () => this.tweens.add({ targets: [button, text], scale: 1.05, duration: 100 }));
-            return { button, text, shadow, action: actionData.action };
+            button.on('pointerup', () => this.tweens.add({ targets: [button, text], scale: 1.05, duration: 100 })); // Add originalText for resetting the label
+            return { button, text, shadow, action: actionData.action, originalText: actionData.text };
         });
     }
 
@@ -391,7 +391,9 @@ export default class GameScene extends Phaser.Scene {
             if (buttonData.action === ACTIONS.CALL) {
                 buttonData.text.setText(`CALL\n$${this.pokerGame.getCallAmount()}`);
             } else {
-                buttonData.text.setText(actionData.text); // Reset other buttons
+                // This was causing the error. `actionData` is not defined here.
+                // We use the `originalText` property we added to the button object.
+                buttonData.text.setText(buttonData.originalText);
             }
             const isVisible = isPlayerTurn && isAvailable && !isShowdown;
             buttonData.button.setVisible(isVisible);
