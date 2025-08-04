@@ -1,3 +1,93 @@
+// src/poker/PokerGame.js
+
+import { HandEvaluator } from './HandEvaluator.js';
+
+// Constants
+export const SUITS = ['hearts', 'diamonds', 'clubs', 'spades'];
+export const RANKS = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
+
+export const GAME_PHASES = {
+    WAITING: 'waiting',
+    DEALING: 'dealing',
+    PREFLOP: 'preflop',
+    FLOP: 'flop',
+    TURN: 'turn',
+    RIVER: 'river',
+    SHOWDOWN: 'showdown',
+    GAME_OVER: 'game_over'
+};
+
+export const ACTIONS = {
+    FOLD: 'fold',
+    CALL: 'call',
+    RAISE: 'raise',
+    CHECK: 'check',
+    BET: 'bet'
+};
+
+// Card Class
+export class Card {
+    constructor(suit, rank) {
+        this.suit = suit;
+        this.rank = rank;
+        this.value = this.getCardValue();
+    }
+    getCardValue() {
+        if (this.rank === 'A') return 14;
+        if (this.rank === 'K') return 13;
+        if (this.rank === 'Q') return 12;
+        if (this.rank === 'J') return 11;
+        return parseInt(this.rank);
+    }
+    toString() { return `${this.rank} of ${this.suit}`; }
+}
+
+// Deck Class
+export class Deck {
+    constructor() { this.cards = []; this.reset(); }
+    reset() {
+        this.cards = [];
+        for (const suit of SUITS) for (const rank of RANKS) this.cards.push(new Card(suit, rank));
+        this.shuffle();
+    }
+    shuffle() {
+        for (let i = this.cards.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this.cards[i], this.cards[j]] = [this.cards[j], this.cards[i]];
+        }
+    }
+    deal() { return this.cards.pop(); }
+}
+
+// Player Class
+export class Player {
+    constructor(name, chips = 1000) {
+        this.name = name;
+        this.chips = chips;
+        this.holeCards = [];
+        this.currentBet = 0;
+        this.isFolded = false;
+        this.isAllIn = false;
+        this.isDealer = false;
+        this.hand = null; // To store the best hand result
+    }
+    resetForNewHand() {
+        this.holeCards = [];
+        this.currentBet = 0;
+        this.isFolded = false;
+        this.isAllIn = false;
+        this.hand = null;
+    }
+    bet(amount) {
+        const betAmount = Math.min(amount, this.chips);
+        this.chips -= betAmount;
+        this.currentBet += betAmount;
+        if (this.chips === 0) this.isAllIn = true;
+        return betAmount;
+    }
+    canAct() { return !this.isFolded && !this.isAllIn; }
+}
+
 // Main Poker Game Logic
 export class PokerGame {
     constructor(playerCount = 4) {
