@@ -1,5 +1,3 @@
-// src/poker/PokerGame.js
-
 import { HandEvaluator } from './HandEvaluator.js';
 
 // Constants
@@ -66,10 +64,11 @@ export class Player {
         this.chips = chips;
         this.holeCards = [];
         this.currentBet = 0;
+        this.hasActed = false; // Flag for betting round logic
         this.isFolded = false;
         this.isAllIn = false;
         this.isDealer = false;
-        this.hand = null; // To store the best hand result
+        this.hand = null;
     }
     resetForNewHand() {
         this.holeCards = [];
@@ -77,6 +76,7 @@ export class Player {
         this.isFolded = false;
         this.isAllIn = false;
         this.hand = null;
+        this.hasActed = false;
     }
     bet(amount) {
         const betAmount = Math.min(amount, this.chips);
@@ -102,7 +102,7 @@ export class PokerGame {
         this.dealerIndex = -1;
         this.smallBlind = 10;
         this.bigBlind = 20;
-        this.lastRaiser = null;
+        this.lastRaiserIndex = -1;
         this.winnerInfo = null;
     }
 
@@ -119,7 +119,6 @@ export class PokerGame {
         this.pot = 0;
         this.currentBet = 0;
         this.winnerInfo = null;
-        this.lastRaiser = null;
         
         this.players.forEach(p => p.resetForNewHand());
 
@@ -131,6 +130,7 @@ export class PokerGame {
         this.dealHoleCards();
         
         this.activePlayerIndex = (this.dealerIndex + 3) % this.playerCount;
+        this.lastRaiserIndex = (this.dealerIndex + 2) % this.playerCount; // Big blind is the initial "raiser"
         this.phase = GAME_PHASES.PREFLOP;
     }
 
@@ -138,14 +138,10 @@ export class PokerGame {
         const smallBlindIndex = (this.dealerIndex + 1) % this.playerCount;
         const bigBlindIndex = (this.dealerIndex + 2) % this.playerCount;
         
-        const sbAmount = this.players[smallBlindIndex].bet(this.smallBlind);
-        this.pot += sbAmount;
+        this.pot += this.players[smallBlindIndex].bet(this.smallBlind);
+        this.pot += this.players[bigBlindIndex].bet(this.bigBlind);
         
-        const bbAmount = this.players[bigBlindIndex].bet(this.bigBlind);
-        this.pot += bbAmount;
-
         this.currentBet = this.bigBlind;
-        this.lastRaiser = this.players[bigBlindIndex];
     }
 
     dealHoleCards() {
@@ -161,26 +157,26 @@ export class PokerGame {
         const player = this.getCurrentPlayer();
         if (!player || !player.canAct()) return;
 
+        player.hasActed = true;
+
         switch (action) {
             case ACTIONS.FOLD:
                 player.isFolded = true;
                 break;
             case ACTIONS.CALL:
-                const callAmount = this.currentBet - player.currentBet;
-                this.pot += player.bet(callAmount);
+                this.pot += player.bet(this.currentBet - player.currentBet);
                 break;
             case ACTIONS.RAISE:
-                const raiseAmount = amount - player.currentBet;
-                this.pot += player.bet(raiseAmount);
+            case ACTIONS.BET:
+                const betAmount = amount - player.currentBet;
+                this.pot += player.bet(betAmount);
                 this.currentBet = player.currentBet;
-                this.lastRaiser = player;
-                break;
-             case ACTIONS.BET: // For when there is no current bet
-                this.pot += player.bet(amount);
-                this.currentBet = player.currentBet;
-                this.lastRaiser = player;
+                this.lastRaiserIndex = this.activePlayerIndex;
+                // Everyone else needs to act again
+                this.players.forEach((p, i) => { if (i !== this.activePlayerIndex) p.hasActed = false; });
                 break;
             case ACTIONS.CHECK:
+                // No change in bet, action is complete
                 break;
         }
 
@@ -193,49 +189,42 @@ export class PokerGame {
     }
 
     advanceToNextPlayer() {
+        if (this.isBettingRoundComplete()) {
+            this.nextPhase();
+            return;
+        }
+
         let nextPlayerIndex = (this.activePlayerIndex + 1) % this.playerCount;
-        
         while (!this.players[nextPlayerIndex].canAct()) {
             nextPlayerIndex = (nextPlayerIndex + 1) % this.playerCount;
         }
-        
         this.activePlayerIndex = nextPlayerIndex;
-
-        if (this.isBettingRoundComplete()) {
-            this.nextPhase();
-        }
     }
 
     isBettingRoundComplete() {
-        const activePlayers = this.getActivePlayers(false);
-        if (activePlayers.length === 0) return true;
+        const activePlayers = this.getActivePlayers(true); // Include all-in players
+        
+        // All active players must have acted and their bets must be equal, unless they are all-in
+        const allBetsEqual = activePlayers.every(p => p.isFolded || p.isAllIn || (p.currentBet === this.currentBet && p.hasActed));
 
-        const firstActorAfterBlinds = (this.dealerIndex + 3) % this.playerCount;
-        if (this.phase === GAME_PHASES.PREFLOP && this.activePlayerIndex === firstActorAfterBlinds && this.currentBet === this.bigBlind) {
-             return false;
-        }
-        
-        // The round is over if the active player is the last person who raised
-        if (this.players[this.activePlayerIndex] === this.lastRaiser) {
-            return true;
-        }
-        
-        // Or if all active players have matched the current bet
-        return activePlayers.every(p => p.currentBet === this.currentBet || p.isAllIn);
+        return allBetsEqual;
     }
     
     nextPhase() {
+        // Reset for the new betting round
         this.currentBet = 0;
-        this.lastRaiser = null;
-        this.players.forEach(p => p.currentBet = 0);
+        this.players.forEach(p => {
+            p.currentBet = 0;
+            p.hasActed = false;
+        });
 
+        // Determine who acts first post-flop
         let firstActorIndex = (this.dealerIndex + 1) % this.playerCount;
         while(!this.players[firstActorIndex].canAct()) {
             firstActorIndex = (firstActorIndex + 1) % this.playerCount;
         }
         this.activePlayerIndex = firstActorIndex;
-        this.lastRaiser = this.players[firstActorIndex];
-
+        this.lastRaiserIndex = firstActorIndex;
 
         switch (this.phase) {
             case GAME_PHASES.PREFLOP:
@@ -255,9 +244,10 @@ export class PokerGame {
                 break;
             case GAME_PHASES.RIVER:
                 this.determineWinner();
-                break;
+                return; // End here
         }
 
+        // If only one player is left after dealing cards, they win
         if (this.getActivePlayers(false).length <= 1) {
              this.determineWinner();
         }
@@ -268,8 +258,8 @@ export class PokerGame {
         const contenders = this.getActivePlayers(true);
 
         if (contenders.length === 1) {
-            this.winnerInfo = { winners: [{...contenders[0], amountWon: this.pot, index: this.players.indexOf(contenders[0])}] };
-            contenders[0].chips += this.pot;
+            this.winnerInfo = { winners: [{...contenders[0], hand: { name: 'High Card' }, amountWon: this.pot, index: this.players.indexOf(contenders[0])}] };
+            this.players[this.winnerInfo.winners[0].index].chips += this.pot;
             return;
         }
 
@@ -280,9 +270,7 @@ export class PokerGame {
         }
 
         bestHands.sort((a, b) => {
-            if (a.hand.rank !== b.hand.rank) {
-                return b.hand.rank - a.hand.rank;
-            }
+            if (a.hand.rank !== b.hand.rank) return b.hand.rank - a.hand.rank;
             return b.hand.value - a.hand.value;
         });
 
