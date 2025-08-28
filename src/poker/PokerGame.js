@@ -1,3 +1,5 @@
+// src/poker/PokerGame.js
+
 import { HandEvaluator } from './HandEvaluator.js';
 
 // Constants
@@ -155,16 +157,24 @@ export class PokerGame {
 
     playerAction(action, amount = 0) {
         const player = this.getCurrentPlayer();
-        if (!player || !player.canAct()) return;
+        console.log(`playerAction called - Player ${this.activePlayerIndex}, Action: ${action}, Amount: ${amount}`);
+        
+        if (!player || !player.canAct()) {
+            console.log('Player cannot act, returning early');
+            return;
+        }
 
         player.hasActed = true;
+        console.log(`Player ${this.activePlayerIndex} hasActed set to true`);
 
         switch (action) {
             case ACTIONS.FOLD:
                 player.isFolded = true;
+                console.log(`Player ${this.activePlayerIndex} folded`);
                 break;
             case ACTIONS.CALL:
                 this.pot += player.bet(this.currentBet - player.currentBet);
+                console.log(`Player ${this.activePlayerIndex} called, pot now: ${this.pot}`);
                 break;
             case ACTIONS.RAISE:
             case ACTIONS.BET:
@@ -172,82 +182,120 @@ export class PokerGame {
                 this.pot += player.bet(betAmount);
                 this.currentBet = player.currentBet;
                 this.lastRaiserIndex = this.activePlayerIndex;
-                // Everyone else needs to act again
-                this.players.forEach((p, i) => { if (i !== this.activePlayerIndex) p.hasActed = false; });
+                this.players.forEach((p, i) => { if (i !== this.activePlayerIndex && p.canAct()) p.hasActed = false; });
+                console.log(`Player ${this.activePlayerIndex} bet/raised to ${this.currentBet}, pot now: ${this.pot}`);
                 break;
             case ACTIONS.CHECK:
-                // No change in bet, action is complete
+                console.log(`Player ${this.activePlayerIndex} checked`);
                 break;
         }
 
         if (this.getActivePlayers(false).length <= 1) {
+            console.log('Only 1 or fewer active players, determining winner');
             this.determineWinner();
             return;
         }
         
+        console.log('Advancing to next player');
         this.advanceToNextPlayer();
     }
 
     advanceToNextPlayer() {
+        console.log(`advanceToNextPlayer called - current active: ${this.activePlayerIndex}`);
+        
         if (this.isBettingRoundComplete()) {
+            console.log('Betting round complete, moving to next phase');
             this.nextPhase();
             return;
         }
 
         let nextPlayerIndex = (this.activePlayerIndex + 1) % this.playerCount;
-        while (!this.players[nextPlayerIndex].canAct()) {
+        console.log(`Looking for next player starting from index: ${nextPlayerIndex}`);
+        
+        let attempts = 0;
+        while (!this.players[nextPlayerIndex].canAct() && attempts < this.playerCount) {
+            console.log(`Player ${nextPlayerIndex} cannot act - folded: ${this.players[nextPlayerIndex].isFolded}, allIn: ${this.players[nextPlayerIndex].isAllIn}`);
             nextPlayerIndex = (nextPlayerIndex + 1) % this.playerCount;
+            attempts++;
         }
+        
+        if (attempts >= this.playerCount) {
+            console.log('No valid next player found, forcing next phase');
+            this.nextPhase();
+            return;
+        }
+        
+        console.log(`Setting active player to: ${nextPlayerIndex}`);
         this.activePlayerIndex = nextPlayerIndex;
     }
 
     isBettingRoundComplete() {
-        const activePlayers = this.getActivePlayers(true); // Include all-in players
+        const activePlayers = this.getActivePlayers(true);
+        console.log(`Checking if betting round complete - Active players: ${activePlayers.length}`);
         
-        // All active players must have acted and their bets must be equal, unless they are all-in
-        const allBetsEqual = activePlayers.every(p => p.isFolded || p.isAllIn || (p.currentBet === this.currentBet && p.hasActed));
-
-        return allBetsEqual;
+        if (activePlayers.length <= 1) {
+            console.log('Betting round complete - only 1 or fewer active players');
+            return true;
+        }
+        
+        // Get players who can still act (not folded, not all-in)
+        const playersWhoCanAct = this.getActivePlayers(false);
+        console.log(`Players who can act: ${playersWhoCanAct.length}`);
+        
+        if (playersWhoCanAct.length <= 1) {
+            console.log('Betting round complete - only 1 or fewer players can act');
+            return true;
+        }
+        
+        // Check if all active players have acted and matched the current bet
+        const allPlayersActed = activePlayers.every(p => {
+            const hasActedCorrectly = p.isFolded || p.isAllIn || (p.currentBet === this.currentBet && p.hasActed);
+            console.log(`Player ${this.players.indexOf(p)} - folded: ${p.isFolded}, allIn: ${p.isAllIn}, currentBet: ${p.currentBet}, hasActed: ${p.hasActed}, betMatches: ${p.currentBet === this.currentBet}`);
+            return hasActedCorrectly;
+        });
+        
+        console.log(`All players acted correctly: ${allPlayersActed}`);
+        return allPlayersActed;
     }
     
     nextPhase() {
-        // Reset for the new betting round
-        this.currentBet = 0;
-        this.players.forEach(p => {
+        this.pot += this.players.reduce((acc, p) => {
+            const bet = p.currentBet;
             p.currentBet = 0;
-            p.hasActed = false;
-        });
+            return acc + bet;
+        }, 0);
+        
+        this.currentBet = 0;
+        this.players.forEach(p => p.hasActed = false);
 
-        // Determine who acts first post-flop
         let firstActorIndex = (this.dealerIndex + 1) % this.playerCount;
         while(!this.players[firstActorIndex].canAct()) {
             firstActorIndex = (firstActorIndex + 1) % this.playerCount;
         }
         this.activePlayerIndex = firstActorIndex;
-        this.lastRaiserIndex = firstActorIndex;
+        this.lastRaiserIndex = -1;
 
         switch (this.phase) {
             case GAME_PHASES.PREFLOP:
                 this.phase = GAME_PHASES.FLOP;
-                this.deck.deal(); // Burn
+                this.deck.deal();
                 this.communityCards.push(this.deck.deal(), this.deck.deal(), this.deck.deal());
                 break;
             case GAME_PHASES.FLOP:
                 this.phase = GAME_PHASES.TURN;
-                this.deck.deal(); // Burn
+                this.deck.deal();
                 this.communityCards.push(this.deck.deal());
                 break;
             case GAME_PHASES.TURN:
                 this.phase = GAME_PHASES.RIVER;
-                this.deck.deal(); // Burn
+                this.deck.deal();
                 this.communityCards.push(this.deck.deal());
                 break;
             case GAME_PHASES.RIVER:
                 this.determineWinner();
-                return; // End here
+                return;
         }
 
-        // If only one player is left after dealing cards, they win
         if (this.getActivePlayers(false).length <= 1) {
              this.determineWinner();
         }
@@ -255,10 +303,19 @@ export class PokerGame {
 
     determineWinner() {
         this.phase = GAME_PHASES.SHOWDOWN;
+        this.pot += this.players.reduce((acc, p) => {
+            const bet = p.currentBet;
+            p.currentBet = 0;
+            return acc + bet;
+        }, 0);
+
         const contenders = this.getActivePlayers(true);
 
         if (contenders.length === 1) {
-            this.winnerInfo = { winners: [{...contenders[0], hand: { name: 'High Card' }, amountWon: this.pot, index: this.players.indexOf(contenders[0])}] };
+            const winner = contenders[0];
+            // FIX: Evaluate hand even if only one player is left, to prevent "Unknown Hand" error.
+            winner.hand = HandEvaluator.evaluateHand(winner.holeCards, this.communityCards);
+            this.winnerInfo = { winners: [{...winner, amountWon: this.pot, index: this.players.indexOf(winner)}] };
             this.players[this.winnerInfo.winners[0].index].chips += this.pot;
             return;
         }

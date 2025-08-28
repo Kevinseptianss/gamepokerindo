@@ -27,14 +27,26 @@ export class HandEvaluator {
         const allCards = [...holeCards, ...communityCards];
         const allCombinations = this.getCombinations(allCards, 5);
         
-        let bestHand = { rank: -1, name: 'Unknown', value: 0, cards: [] };
+        let bestHand = null;
 
         for (const combo of allCombinations) {
             const handResult = this.getBestHandForCombination(combo);
-            if (handResult.rank > bestHand.rank || (handResult.rank === bestHand.rank && handResult.value > bestHand.value)) {
+            if (!bestHand || handResult.rank > bestHand.rank || (handResult.rank === bestHand.rank && handResult.value > bestHand.value)) {
                 bestHand = handResult;
             }
         }
+        
+        // If for some reason no hand is found, return high card as fallback
+        if (!bestHand) {
+            const sortedCards = allCards.sort((a, b) => b.value - a.value).slice(0, 5);
+            bestHand = { 
+                rank: HAND_RANK.HIGH_CARD, 
+                name: 'High Card', 
+                value: this.getHighCardValue(sortedCards), 
+                cards: sortedCards 
+            };
+        }
+        
         return bestHand;
     }
 
@@ -103,17 +115,18 @@ export class HandEvaluator {
     }
 
     static isStraight(cards) {
+        const sortedCards = [...cards].sort((a, b) => b.value - a.value);
+        
         // Handle Ace-low straight (A, 2, 3, 4, 5)
-        const isAceLow = cards.map(c => c.rank).join('') === 'A5432';
+        const ranks = sortedCards.map(c => c.value);
+        const isAceLow = ranks.includes(14) && ranks.includes(5) && ranks.includes(4) && ranks.includes(3) && ranks.includes(2);
         if (isAceLow) {
-            // Re-order for value calculation
-            const ace = cards.shift();
-            cards.push(ace);
             return true;
         }
         
-        for (let i = 0; i < cards.length - 1; i++) {
-            if (cards[i].value !== cards[i + 1].value + 1) {
+        // Check for regular straights
+        for (let i = 0; i < sortedCards.length - 1; i++) {
+            if (sortedCards[i].value !== sortedCards[i + 1].value + 1) {
                 return false;
             }
         }

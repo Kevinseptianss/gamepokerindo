@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { PokerGame, GAME_PHASES, ACTIONS } from '../poker/PokerGame.js';
 import { AI_PERSONALITIES } from '../poker/AIPlayer.js';
+import { HandEvaluator } from '../poker/HandEvaluator.js'; // Import the evaluator
 
 export default class GameScene extends Phaser.Scene {
     constructor() {
@@ -18,10 +19,15 @@ export default class GameScene extends Phaser.Scene {
         this.winnerText = null;
         this.playerCardsGroup = null;
         this.communityCardsGroup = null;
+        this.handRankText = null; // NEW: Text for player's current hand rank
         
         // Raise UI
         this.raiseSlider = null;
         this.raiseAmountText = null;
+
+    // Global card size (adjust to fit the table)
+    this.cardWidth = 56;
+    this.cardHeight = 78;
 
         this.aiPlayers = [
             null, // Human player
@@ -29,9 +35,11 @@ export default class GameScene extends Phaser.Scene {
             AI_PERSONALITIES.LOOSE_PASSIVE,
             AI_PERSONALITIES.LOOSE_AGGRESSIVE
         ];
+    // Dev/testing: when true the human player will be auto-played so the game can run to completion
+    this.autoPlay = false;
     }
 
-    preload() { this.createCardGraphics(); }
+    preload() { this.loadCardImages(); }
 
     create() {
         const { width, height } = this.cameras.main;
@@ -60,33 +68,82 @@ export default class GameScene extends Phaser.Scene {
         tableGraphics.lineStyle(2, 0x4caf50).strokeRoundedRect(width / 2 - cardAreaWidth / 2, height / 2 - cardAreaHeight / 2, cardAreaWidth, cardAreaHeight, 10);
     }
 
-    createCardGraphics() {
-        const cardWidth = 70, cardHeight = 98;
-        const backGraphics = this.add.graphics();
-        backGraphics.fillStyle(0x0d47a1).fillRoundedRect(0, 0, cardWidth, cardHeight, 8);
-        backGraphics.lineStyle(3, 0x1976d2).strokeRoundedRect(1.5, 1.5, cardWidth - 3, cardHeight - 3, 7);
-        backGraphics.generateTexture('card-back', cardWidth, cardHeight);
-        backGraphics.destroy();
-        const suits = ['hearts', 'diamonds', 'clubs', 'spades'], suitSymbols = ['♥', '♦', '♣', '♠'], suitColors = ['#e53935', '#e53935', '#212121', '#212121'];
-        const ranks = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
-        suits.forEach((suit, suitIndex) => ranks.forEach(rank => this.createBeautifulCard(suit, rank, suitSymbols[suitIndex], suitColors[suitIndex], cardWidth, cardHeight)));
+    // Load card PNGs from a local assets folder instead of generating textures at runtime.
+    // You placed the repo images into the project's `public/cards/` folder — use that path here.
+    // Filenames follow the repo pattern: e.g. `2_of_clubs.png`, `jack_of_clubs.png`, `ace_of_spades.png`, and `back.png`.
+    loadCardImages() {
+    const basePath = 'cards/'; // relative to index.html / public/
+    // Detect high-DPI and choose the appropriate back image (back@2x.png exists in the folder)
+    const isHiDPI = (typeof window !== 'undefined' && window.devicePixelRatio && window.devicePixelRatio > 1);
+    this.cardBackScaleFactor = isHiDPI ? 0.5 : 1; // when loading @2x image we must scale it down by 0.5 to match layout
+    const backFile = isHiDPI ? 'back@2x.png' : 'back.png';
+    this.load.image('card-back', `${basePath}${backFile}`);
+
+        const suits = ['hearts', 'diamonds', 'clubs', 'spades'];
+        const ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+
+        // Helper to map rank code to filename word
+        const rankToWord = rank => {
+            if (rank === 'J') return 'jack';
+            if (rank === 'Q') return 'queen';
+            if (rank === 'K') return 'king';
+            if (rank === 'A') return 'ace';
+            return rank; // numbers stay the same (e.g., '2', '10')
+        };
+
+        // Load each card image with the key `card-{suit}-{rank}` so the rest of the code continues
+        // to use `card-${card.suit}-${card.rank}` while filenames follow the repo pattern
+        // e.g. `ace_of_spades.png`, `jack_of_clubs.png`, `2_of_clubs.png`.
+        suits.forEach(suit => {
+            ranks.forEach(rank => {
+                const key = `card-${suit}-${rank}`;
+                const rankWord = rankToWord(rank);
+                const filename = `${rankWord}_of_${suit}.png`;
+                this.load.image(key, basePath + filename);
+            });
+        });
     }
 
-    createBeautifulCard(suit, rank, symbol, color, width, height) {
-        const container = this.add.container(0, 0);
-        const graphics = this.add.graphics().fillStyle(0xffffff).fillRoundedRect(0, 0, width, height, 8).lineStyle(1, 0xcccccc).strokeRoundedRect(0, 0, width, height, 8);
-        container.add(graphics);
-        const textStyle = { fontFamily: 'Arial, sans-serif', color: color, fontStyle: 'bold' };
-        container.add([
-            this.add.text(9, 6, rank, { ...textStyle, fontSize: '18px' }),
-            this.add.text(9, 26, symbol, { ...textStyle, fontSize: '14px' }),
-            this.add.text(width - 9, height - 6, rank, { ...textStyle, fontSize: '18px' }).setOrigin(1, 1).setRotation(Math.PI),
-            this.add.text(width - 9, height - 26, symbol, { ...textStyle, fontSize: '14px' }).setOrigin(1, 1).setRotation(Math.PI),
-            this.add.text(width / 2, height / 2, symbol, { ...textStyle, fontSize: '48px' }).setOrigin(0.5)
-        ]);
-        const rt = this.add.renderTexture(0, 0, width, height).setVisible(false);
-        rt.draw(container, 0, 0).saveTexture(`card-${suit}-${rank}`);
-        container.destroy(); rt.destroy();
+    // Create a container with a rounded background + card image on top.
+    // Returns the container. The inner image can be retrieved with `getCardImage`.
+    createCardContainer(x, y, textureKey, scale = 1) {
+        const container = this.add.container(x, y);
+
+        const width = this.cardWidth;
+        const height = this.cardHeight;
+
+        // Background rectangle (rounded) behind the card image
+        const bg = this.add.graphics();
+        const radius = Math.max(6, Math.min(width, height) * 0.08);
+        const fillColor = 0xffffff;
+        const borderColor = 0xcccccc;
+        bg.fillStyle(fillColor, 1).fillRoundedRect(-width/2, -height/2, width, height, radius);
+        bg.lineStyle(2, borderColor, 1).strokeRoundedRect(-width/2, -height/2, width, height, radius);
+
+        // Card image centered on container; use setDisplaySize so it fits the bg
+        const img = this.add.image(0, 0, textureKey).setOrigin(0.5);
+        img.setDisplaySize(width * scale, height * scale);
+
+        container.add([bg, img]);
+
+        // Store dimensions on container for later reference
+        container.cardWidth = width;
+        container.cardHeight = height;
+
+        return container;
+    }
+
+    // Given a container or image, return the inner image GameObject (or the object itself if image)
+    getCardImage(obj) {
+        if (!obj) return null;
+        if (obj.texture) return obj; // it's already an Image
+        if (obj.list && obj.list.length) {
+            for (let i = 0; i < obj.list.length; i++) {
+                const child = obj.list[i];
+                if (child && child.texture) return child;
+            }
+        }
+        return null;
     }
 
     createUI() {
@@ -94,6 +151,10 @@ export default class GameScene extends Phaser.Scene {
         this.phaseText = this.add.text(width / 2, 30, '', { fontSize: '18px', fontFamily: 'Arial', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
         this.potText = this.add.text(width / 2, height * 0.38, '', { fontSize: '16px', fontFamily: 'Arial', fill: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
         this.winnerText = this.add.text(width / 2, height / 2, '', { fontSize: '24px', fontFamily: 'Arial', fill: '#ffeb3b', fontStyle: 'bold', align: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: { x: 20, y: 10 }, lineSpacing: 8 }).setOrigin(0.5).setDepth(100).setVisible(false);
+        
+        // NEW: Initialize the hand rank text
+        this.handRankText = this.add.text(width / 2, height - 200, '', { fontSize: '16px', fontFamily: 'Arial', fill: '#fff', fontStyle: 'italic' }).setOrigin(0.5);
+
         this.communityCardsGroup = this.add.group();
         this.playerCardsGroup = this.add.group();
         this.createPlayerDisplays();
@@ -101,7 +162,6 @@ export default class GameScene extends Phaser.Scene {
 
     createPlayerDisplays() {
         const { width, height } = this.cameras.main;
-        // FIX: Adjusted Y-positions for better layout
         const positions = [
             { x: width / 2, y: height - 250 }, // Player info box
             { x: 70, y: height * 0.4 },      // AI 1
@@ -116,14 +176,19 @@ export default class GameScene extends Phaser.Scene {
     }
     
     createRaiseSlider() {
-        const { width, height } = this.cameras.main;
-        const sliderX = width / 2, sliderY = height - 85, sliderWidth = 150;
-        const track = this.add.rectangle(sliderX, sliderY, sliderWidth, 10, 0x000000, 0.5).setOrigin(0.5);
-        const handle = this.add.circle(sliderX - sliderWidth / 2, sliderY, 8, 0xffffff).setInteractive({ draggable: true });
-        this.raiseAmountText = this.add.text(sliderX, sliderY - 25, '', { fontSize: '14px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+    const { width } = this.cameras.main;
+    const sliderX = width / 2, sliderWidth = 150;
+    // create at y=0, positionControls will place them correctly
+    const track = this.add.rectangle(sliderX, 0, sliderWidth, 10, 0x000000, 0.5).setOrigin(0.5).setDepth(60);
+    const handle = this.add.circle(sliderX - sliderWidth / 2, 0, 8, 0xffffff).setInteractive({ draggable: true }).setDepth(61);
+    this.raiseAmountText = this.add.text(sliderX, -25, '', { fontSize: '14px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(62);
+
+        // Use the track's current position/width when dragging so layout changes won't break the math
         handle.on('drag', (p, dragX) => {
-            handle.x = Phaser.Math.Clamp(dragX, sliderX - sliderWidth / 2, sliderX + sliderWidth / 2);
-            const percentage = (handle.x - (sliderX - sliderWidth / 2)) / sliderWidth;
+            const tx = track.x;
+            const tw = track.width;
+            handle.x = Phaser.Math.Clamp(dragX, tx - tw / 2, tx + tw / 2);
+            const percentage = (handle.x - (tx - tw / 2)) / tw;
             const player = this.pokerGame.players[0];
             const minRaise = this.pokerGame.getMinRaise();
             const maxRaise = player.chips + player.currentBet;
@@ -131,13 +196,16 @@ export default class GameScene extends Phaser.Scene {
             this.raiseSlider.value = Phaser.Math.Clamp(raiseAmount, minRaise, maxRaise);
             this.raiseAmountText.setText(`Raise to $${this.raiseSlider.value}`);
         });
-        this.raiseSlider = { track, handle, value: 0, setVisible: (v) => { track.setVisible(v); handle.setVisible(v); this.raiseAmountText.setVisible(v); }};
+
+    this.raiseSlider = { track, handle, value: 0, setVisible: (v) => { track.setVisible(v); handle.setVisible(v); this.raiseAmountText.setVisible(v); this.positionControls(); }};
         this.raiseSlider.setVisible(false);
+    // position after creation
+    this.positionControls();
     }
 
     createActionButtons() {
         const { width, height } = this.cameras.main;
-        const buttonY = height - 45;
+    // buttons will be positioned by positionControls()
         const actions = [
             { action: ACTIONS.FOLD, text: 'FOLD', color: 0xd32f2f },
             { action: ACTIONS.CALL, text: 'CALL', color: 0x388e3c },
@@ -146,12 +214,65 @@ export default class GameScene extends Phaser.Scene {
             { action: ACTIONS.BET, text: 'BET', color: 0xf57c00 }
         ];
         this.actionButtons = actions.map(actionData => {
-            const button = this.add.rectangle(0, buttonY, 70, 40, actionData.color).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true });
-            const text = this.add.text(0, buttonY, actionData.text, { fontSize: '12px', fill: '#fff', fontStyle: 'bold', align: 'center' }).setOrigin(0.5);
+            const button = this.add.rectangle(0, 0, 70, 40, actionData.color).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true }).setDepth(70);
+            const text = this.add.text(0, 0, actionData.text, { fontSize: '12px', fill: '#fff', fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setDepth(71);
             button.on('pointerover', () => button.setAlpha(0.8));
             button.on('pointerout', () => button.setAlpha(1));
             button.on('pointerdown', () => this.tweens.add({ targets: [button, text], scale: 0.9, duration: 100, yoyo: true, onComplete: () => this.handlePlayerAction(actionData.action) }));
             return { ...actionData, button, text, originalText: actionData.text };
+        });
+        // position after creation
+        this.positionControls();
+    }
+
+    // Position raise slider and action buttons to avoid overlapping cards.
+    positionControls() {
+        if (!this.cameras || !this.actionButtons) return;
+        const { width, height } = this.cameras.main;
+
+        // Player card top position (where player's cards are placed)
+    const playerCardsY = height - 150; // matches updatePlayerCards
+    // compute bottom of player's card area
+    const cardBottom = playerCardsY + (this.cardHeight * 0.9) / 2;
+
+    // sliderY: place below player's cards with a margin so it doesn't overlap
+    const sliderMargin = 16;
+    let sliderY = cardBottom + sliderMargin;
+
+    // ensure slider stays visible within viewport (not too close to bottom)
+    const maxSliderY = height - 90;
+    sliderY = Math.min(sliderY, maxSliderY);
+
+    // buttonsY: place below slider with a small gap
+    const buttonsY = sliderY + 46;
+
+        // update slider elements
+        if (this.raiseSlider && this.raiseSlider.track) {
+            const track = this.raiseSlider.track;
+            const handle = this.raiseSlider.handle;
+            // center track horizontally
+            track.x = width / 2;
+            track.y = sliderY;
+            // ensure handle stays on the track when repositioning
+            const left = track.x - track.width / 2;
+            const right = track.x + track.width / 2;
+            handle.y = sliderY;
+            handle.x = Phaser.Math.Clamp(handle.x || left, left, right);
+            this.raiseAmountText.x = track.x;
+            this.raiseAmountText.y = sliderY - 22;
+        }
+
+        // layout visible buttons horizontally centered at buttonsY
+        const visibleButtons = this.actionButtons.filter(b => b.button.visible);
+        const spacing = 80;
+        const totalWidth = (visibleButtons.length - 1) * spacing;
+        const startX = width / 2 - totalWidth / 2;
+        visibleButtons.forEach((btn, i) => {
+            const x = startX + i * spacing;
+            btn.button.x = x;
+            btn.button.y = buttonsY;
+            btn.text.x = x;
+            btn.text.y = buttonsY;
         });
     }
 
@@ -166,20 +287,79 @@ export default class GameScene extends Phaser.Scene {
         this.animateBet(0, amount);
         this.pokerGame.playerAction(action, amount);
         this.updateGameDisplay();
-        if (this.pokerGame.phase < GAME_PHASES.SHOWDOWN) {
+        if (this.pokerGame.phase !== GAME_PHASES.SHOWDOWN && this.pokerGame.phase !== GAME_PHASES.GAME_OVER) {
             this.time.delayedCall(500, () => this.handleAITurns());
         }
     }
 
     handleAITurns() {
-        if (this.pokerGame.activePlayerIndex === 0 || this.pokerGame.phase >= GAME_PHASES.SHOWDOWN) {
+        console.log(`handleAITurns called - Active player: ${this.pokerGame.activePlayerIndex}, Phase: ${this.pokerGame.phase}`);
+        // Diagnostics: log the boolean checks to catch unexpected truthiness
+        console.log('diagnostics:', {
+            activeIs0: this.pokerGame.activePlayerIndex === 0,
+            phase: this.pokerGame.phase,
+            phaseIsShowdown: this.pokerGame.phase === GAME_PHASES.SHOWDOWN,
+            phaseIsGameOver: this.pokerGame.phase === GAME_PHASES.GAME_OVER
+        });
+
+    if (this.pokerGame.activePlayerIndex === 0 || this.pokerGame.phase === GAME_PHASES.SHOWDOWN || this.pokerGame.phase === GAME_PHASES.GAME_OVER) {
+            // If it's the human player's turn and autoPlay is enabled, perform a default action
+            if (this.pokerGame.activePlayerIndex === 0 && this.autoPlay && this.pokerGame.phase < GAME_PHASES.SHOWDOWN) {
+                const available = this.pokerGame.getPlayerActions();
+                // Prefer CALL, then CHECK, then RAISE (minRaise), else FOLD
+                let actionToDo = null;
+                let amount = 0;
+                if (available.includes(ACTIONS.CALL)) {
+                    actionToDo = ACTIONS.CALL;
+                } else if (available.includes(ACTIONS.CHECK)) {
+                    actionToDo = ACTIONS.CHECK;
+                } else if (available.includes(ACTIONS.RAISE) || available.includes(ACTIONS.BET)) {
+                    actionToDo = available.includes(ACTIONS.RAISE) ? ACTIONS.RAISE : ACTIONS.BET;
+                    amount = this.pokerGame.getMinRaise();
+                } else if (available.includes(ACTIONS.FOLD)) {
+                    actionToDo = ACTIONS.FOLD;
+                }
+                if (actionToDo) {
+                    console.log(`Auto-playing for player 0: ${actionToDo} ${amount || ''}`);
+                    this.time.delayedCall(300, () => {
+                        this.pokerGame.playerAction(actionToDo, amount);
+                        this.updateGameDisplay();
+                        this.time.delayedCall(300, () => this.handleAITurns());
+                    });
+                    return;
+                }
+            }
+            console.log('Ending AI turns - either human player turn or showdown phase');
             this.updateGameDisplay();
             return;
         }
+        
         const index = this.pokerGame.activePlayerIndex;
         const player = this.pokerGame.getCurrentPlayer();
-        const gameState = { currentBet: this.pokerGame.currentBet, pot: this.pokerGame.pot, phase: this.pokerGame.phase, holeCards: player.holeCards, communityCards: this.pokerGame.communityCards, availableActions: this.pokerGame.getPlayerActions() };
+        
+        if (!player || !player.canAct()) {
+            console.log(`Player ${index} cannot act - folded: ${player?.isFolded}, allIn: ${player?.isAllIn}`);
+            this.pokerGame.advanceToNextPlayer();
+            this.time.delayedCall(500, () => this.handleAITurns());
+            return;
+        }
+        
+        console.log(`AI Player ${index} making decision - Chips: ${player.chips}, Current bet: ${player.currentBet}, Can act: ${player.canAct()}`);
+        
+        const gameState = { 
+            currentBet: this.pokerGame.currentBet, 
+            pot: this.pokerGame.pot, 
+            phase: this.pokerGame.phase, 
+            holeCards: player.holeCards, 
+            communityCards: this.pokerGame.communityCards, 
+            availableActions: this.pokerGame.getPlayerActions() 
+        };
+        
+        console.log(`Game state: currentBet=${gameState.currentBet}, pot=${gameState.pot}, availableActions=${gameState.availableActions.join(',')}`);
+        
         const decision = this.aiPlayers[index].makeDecision(gameState, player);
+        console.log(`AI ${index} decision:`, decision);
+        
         this.showAIAction(index, decision.action, decision.amount);
         this.time.delayedCall(800, () => {
             if (decision.action === ACTIONS.CALL) decision.amount = this.pokerGame.getCallAmount();
@@ -242,6 +422,7 @@ export default class GameScene extends Phaser.Scene {
         this.updateCommunityCards();
         this.updatePlayerCards();
         this.updateActionButtons();
+        this.updateHandRankText(); // NEW: Update the hand rank text
         if (this.pokerGame.phase === GAME_PHASES.SHOWDOWN) {
             this.revealAllCards();
             this.displayWinner();
@@ -249,9 +430,20 @@ export default class GameScene extends Phaser.Scene {
         }
     }
     
+    // NEW: Function to update the player's hand rank display
+    updateHandRankText() {
+        const player = this.pokerGame.players[0];
+        if (!player || !player.holeCards || player.holeCards.length < 2 || this.pokerGame.phase >= GAME_PHASES.SHOWDOWN) {
+            this.handRankText.setText('').setVisible(false);
+            return;
+        }
+
+        const hand = HandEvaluator.evaluateHand(player.holeCards, this.pokerGame.communityCards);
+        this.handRankText.setText(`${hand.name}`).setVisible(true);
+    }
+
     revealAllCards() {
         const { width, height } = this.cameras.main;
-        // FIX: Adjusted Y positions to prevent overlap
         const positions = [ 
             null, 
             { x: 70, y: height * 0.4 + 60 }, 
@@ -262,8 +454,8 @@ export default class GameScene extends Phaser.Scene {
             if (index > 0 && !player.isFolded && this.aiCardGroups[index] && this.aiCardGroups[index].countActive() === 0) {
                 player.holeCards.forEach((card, cardIndex) => {
                     const x = positions[index].x - 20 + (cardIndex * 40), y = positions[index].y;
-                    const cardSprite = this.add.image(x, y, `card-${card.suit}-${card.rank}`).setScale(0.5);
-                    this.aiCardGroups[index].add(cardSprite);
+                    const container = this.createCardContainer(x, y, `card-${card.suit}-${card.rank}`, 0.5, 70, 98);
+                    this.aiCardGroups[index].add(container);
                 });
             }
         });
@@ -277,13 +469,19 @@ export default class GameScene extends Phaser.Scene {
         const winnerText = `${winnerName} wins $${Math.floor(winner.amountWon)}\nwith a ${winner.hand.name}`;
         this.winnerText.setText(winnerText).setVisible(true);
         const allWinningCards = new Set(winner.hand.cards.map(c => `${c.rank}-${c.suit}`));
+        // Tint inner images of containerized cards (or the image itself) for winning cards
         this.communityCardsGroup.children.each(c => {
-            const cardKey = c.texture.key.replace('card-', '').replace(/-/g, '-');
-            if (allWinningCards.has(cardKey)) c.setTint(0xffff00); else c.clearTint();
+            const img = this.getCardImage(c);
+            if (!img || !img.texture) return;
+            const cardKey = img.texture.key.replace('card-', '').replace(/-/g, '-');
+            if (allWinningCards.has(cardKey)) img.setTint(0xffff00); else img.clearTint();
         });
-         this.playerCardsGroup.children.each(c => {
-            const cardKey = c.texture.key.replace('card-', '').replace(/-/g, '-');
-            if (allWinningCards.has(cardKey)) c.setTint(0xffff00); else c.clearTint();
+
+        this.playerCardsGroup.children.each(c => {
+            const img = this.getCardImage(c);
+            if (!img || !img.texture) return;
+            const cardKey = img.texture.key.replace('card-', '').replace(/-/g, '-');
+            if (allWinningCards.has(cardKey)) img.setTint(0xffff00); else img.clearTint();
         });
     }
 
@@ -296,18 +494,26 @@ export default class GameScene extends Phaser.Scene {
         const deckX = width / 2, deckY = height / 2 - 100;
         const y = height * 0.48;
         this.pokerGame.communityCards.forEach((card, index) => {
-            if (this.communityCardsGroup.children.entries.some(s => s.texture.key === `card-${card.suit}-${card.rank}`)) return;
+            // Check existing community cards by inspecting the inner image of containers (safe for containerized cards)
+            const already = this.communityCardsGroup.children.entries.some(s => {
+                const img = this.getCardImage(s);
+                return img && img.texture && img.texture.key === `card-${card.suit}-${card.rank}`;
+            });
+            if (already) return;
             const x = fixedStartX + index * cardSpacing;
-            const cardSprite = this.add.image(deckX, deckY, 'card-back').setScale(cardScale);
-            this.communityCardsGroup.add(cardSprite);
-            this.tweens.add({ targets: cardSprite, x, y, duration: 500, ease: 'Cubic.easeOut', delay: 100 * index, onComplete: () => {
-                cardSprite.setTexture(`card-${card.suit}-${card.rank}`);
+        const container = this.createCardContainer(deckX, deckY, 'card-back', cardScale);
+            this.communityCardsGroup.add(container);
+            this.tweens.add({ targets: container, x, y, duration: 500, ease: 'Cubic.easeOut', delay: 100 * index, onComplete: () => {
+                const img = this.getCardImage(container);
+                if (img) {
+                    img.setTexture(`card-${card.suit}-${card.rank}`);
+            img.setDisplaySize(this.cardWidth * cardScale, this.cardHeight * cardScale);
+                }
             }});
         });
     }
 
     updatePlayerCards() {
-        // FIX: Replace flag with a check on the group's children to prevent re-dealing
         if (!this.pokerGame || !this.pokerGame.players[0] || this.playerCardsGroup.countActive() > 0) return;
         
         const player = this.pokerGame.players[0];
@@ -317,12 +523,15 @@ export default class GameScene extends Phaser.Scene {
         const cardScale = 0.9, deckX = width / 2, deckY = height / 2 - 100;
         
         player.holeCards.forEach((card, index) => {
-            // FIX: Adjusted Y-position to be below the info box
-            const x = width / 2 - 40 + index * 50, y = height - 170;
-            const cardSprite = this.add.image(deckX, deckY, 'card-back').setScale(cardScale);
-            this.playerCardsGroup.add(cardSprite);
-            this.tweens.add({ targets: cardSprite, x, y, duration: 500, ease: 'Cubic.easeOut', delay: 150 * index, onComplete: () => {
-                cardSprite.setTexture(`card-${card.suit}-${card.rank}`);
+            const x = width / 2 - 40 + index * 80, y = height - 150;
+        const container = this.createCardContainer(deckX, deckY, 'card-back', cardScale);
+            this.playerCardsGroup.add(container);
+            this.tweens.add({ targets: container, x, y, duration: 500, ease: 'Cubic.easeOut', delay: 150 * index, onComplete: () => {
+                const img = this.getCardImage(container);
+                if (img) {
+                    img.setTexture(`card-${card.suit}-${card.rank}`);
+            img.setDisplaySize(this.cardWidth * cardScale, this.cardHeight * cardScale);
+                }
             }});
         });
     }
@@ -330,7 +539,7 @@ export default class GameScene extends Phaser.Scene {
     updateActionButtons() {
         if (!this.pokerGame || !this.actionButtons) return;
         const isPlayerTurn = this.pokerGame.activePlayerIndex === 0;
-        const isShowdown = this.pokerGame.phase >= GAME_PHASES.SHOWDOWN;
+    const isShowdown = this.pokerGame.phase === GAME_PHASES.SHOWDOWN || this.pokerGame.phase === GAME_PHASES.GAME_OVER;
         const availableActions = isPlayerTurn ? this.pokerGame.getPlayerActions() : [];
         
         let visibleButtons = [];
@@ -346,14 +555,8 @@ export default class GameScene extends Phaser.Scene {
             }
         });
 
-        const spacing = 80;
-        const totalWidth = (visibleButtons.length - 1) * spacing;
-        const startX = this.cameras.main.width / 2 - totalWidth / 2;
-        visibleButtons.forEach((btn, index) => {
-            const x = startX + index * spacing;
-            btn.button.x = x;
-            btn.text.x = x;
-        });
+    // Layout is handled by positionControls() to avoid overlaps; just call it now.
+    this.positionControls();
 
         const canRaise = availableActions.includes(ACTIONS.RAISE) || availableActions.includes(ACTIONS.BET);
         this.raiseSlider.setVisible(isPlayerTurn && canRaise && !isShowdown);
