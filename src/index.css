@@ -26,7 +26,9 @@ canvas {
   width: 100% !important;
   height: 100% !important;
   display: block;
-  image-rendering: auto;
+  /* Let the browser choose the best interpolation; avoid pixelated scaling on HiDPI */
+  image-rendering: -webkit-optimize-contrast;
+  image-rendering: crisp-edges;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

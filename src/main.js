@@ -9,22 +9,23 @@ const DPR = (typeof window !== 'undefined' && window.devicePixelRatio) ? window.
 const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams('');
 const hdMode = urlParams.get('hd'); // '2x' or '4k'
 
-let baseWidth = 393; // logical CSS pixels
-let baseHeight = 852;
-let resolution = DPR; // default backing-store pixel ratio
+// Use reasonable base size that works well with Scale.FIT - don't make it too large
+let baseWidth = 800; // logical CSS pixels - reasonable size for scaling
+let baseHeight = 600; // logical CSS pixels - reasonable size for scaling  
+let resolution = DPR; // use device pixel ratio for backing store sharpness
 
 if (hdMode === '2x') {
     // double logical resolution (HD mode) - safer than full 4K
     baseWidth = 1920;
     baseHeight = 1080;
-    resolution = Math.min(3, DPR); // allow up to DPR backing store
+    resolution = Math.max(3, DPR); // allow up to 3x DPR backing store for extra sharpness
     console.log('HD mode: 2x enabled — using', baseWidth, 'x', baseHeight, 'resolution', resolution);
 } else if (hdMode === '4k') {
     // 4K logical canvas: WARNING - may use a lot of memory on mobile devices
     baseWidth = 3840;
     baseHeight = 2160;
-    // keep resolution 1 to avoid extremely large backing buffers; Phaser will scale down
-    resolution = 1;
+    // use at least 2x resolution even in 4K mode for sharpness
+    resolution = Math.max(2, DPR);
     console.warn('HD mode: 4K enabled — this may be slow or use large memory on mobile devices');
 }
 
@@ -37,17 +38,8 @@ const config = {
     backgroundColor: '#0d4d3c',
     resolution: resolution, // render backing store multiplier
     scale: {
-        mode: Phaser.Scale.FIT,
+        mode: Phaser.Scale.RESIZE,
         autoCenter: Phaser.Scale.CENTER_BOTH,
-        // Allow a wider range so the game can adapt to different screens
-        min: {
-            width: 320,
-            height: 568
-        },
-        max: {
-            width: Math.min(3840, baseWidth),
-            height: Math.min(2160, baseHeight)
-        }
     },
     render: {
         antialias: true,
@@ -87,10 +79,24 @@ function fitCanvasToContainer() {
         if (!canvas || !container) return;
         // Set CSS size to container size (Phaser will handle the backing store via resolution)
         const rect = container.getBoundingClientRect();
+        // Determine the resolution Phaser is using (fallback to devicePixelRatio)
+        const res = (game && game.config && game.config.resolution) ? (game.config.resolution || window.devicePixelRatio || 1) : (window.devicePixelRatio || 1);
+        // Set the CSS display size to container logical pixels
         canvas.style.width = `${Math.round(rect.width)}px`;
         canvas.style.height = `${Math.round(rect.height)}px`;
-        // Ensure canvas drawing buffer is sized according to DPR (Phaser uses config.resolution)
-        // No direct changes to canvas.width/height needed here; Phaser sets them based on resolution.
+        
+        // Let Phaser handle the backing buffer via its resolution system - don't override manually
+        // Manual canvas.width/height can desync Phaser's renderer and cause black screens
+        console.log(`Canvas CSS sizing: ${Math.round(rect.width)}x${Math.round(rect.height)} (DPR=${res})`);
+        
+        // If a 2D context exists, ensure smoothing is enabled for crisp vector/text rendering
+        try {
+            const ctx = canvas.getContext && canvas.getContext('2d');
+            if (ctx) {
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+            }
+        } catch (e) { /* ignore */ }
     } catch (e) {
         // ignore in environments without DOM
     }
