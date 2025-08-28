@@ -173,7 +173,7 @@ export default class GameScene extends Phaser.Scene {
     // cardBackScaleFactor so the visual size stays correct while using the higher-resolution asset.
     // Size the inner image slightly smaller than the background so the rounded border
     // remains visible and images don't appear to overflow the card container.
-    const innerScale = 0.8; // percent of container size used for the inner image
+    const innerScale = 0.92; // percent of container size used for the inner image
     img.setDisplaySize(width * innerScale, height * innerScale);
 
     container.add([bg, img]);
