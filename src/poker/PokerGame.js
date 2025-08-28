@@ -69,6 +69,7 @@ export class Player {
         this.hasActed = false; // Flag for betting round logic
         this.isFolded = false;
         this.isAllIn = false;
+        this.isBankrupt = false;
         this.isDealer = false;
         this.hand = null;
     }
@@ -81,13 +82,19 @@ export class Player {
         this.hasActed = false;
     }
     bet(amount) {
-        const betAmount = Math.min(amount, this.chips);
+        // Clamp bet to available chips; prevent negative chips
+        const betAmount = Math.min(Math.max(0, amount), this.chips);
         this.chips -= betAmount;
+        if (this.chips < 0) this.chips = 0;
         this.currentBet += betAmount;
-        if (this.chips === 0) this.isAllIn = true;
+        // If player has no chips left, mark as all-in and bankrupt so they won't act further
+        if (this.chips === 0) {
+            this.isAllIn = true;
+            this.isBankrupt = true;
+        }
         return betAmount;
     }
-    canAct() { return !this.isFolded && !this.isAllIn; }
+    canAct() { return !this.isFolded && !this.isAllIn && !this.isBankrupt && this.chips > 0; }
 }
 
 // Main Poker Game Logic
@@ -259,12 +266,10 @@ export class PokerGame {
     }
     
     nextPhase() {
-        this.pot += this.players.reduce((acc, p) => {
-            const bet = p.currentBet;
-            p.currentBet = 0;
-            return acc + bet;
-        }, 0);
-        
+        // Bets are collected into the pot at the time players bet/call (player.bet()).
+        // Here we only need to clear per-player currentBet and reset round state.
+        this.players.forEach(p => { p.currentBet = 0; });
+
         this.currentBet = 0;
         this.players.forEach(p => p.hasActed = false);
 
@@ -303,11 +308,8 @@ export class PokerGame {
 
     determineWinner() {
         this.phase = GAME_PHASES.SHOWDOWN;
-        this.pot += this.players.reduce((acc, p) => {
-            const bet = p.currentBet;
-            p.currentBet = 0;
-            return acc + bet;
-        }, 0);
+        // Ensure currentBet values are cleared; pot already contains bets collected when actions occurred.
+        this.players.forEach(p => { p.currentBet = 0; });
 
         const contenders = this.getActivePlayers(true);
 
@@ -345,8 +347,8 @@ export class PokerGame {
     }
 
     getActivePlayers(includeAllIn = true) {
-        if (includeAllIn) return this.players.filter(p => !p.isFolded);
-        return this.players.filter(p => p.canAct());
+    if (includeAllIn) return this.players.filter(p => !p.isFolded && !p.isBankrupt);
+    return this.players.filter(p => p.canAct());
     }
 
     getCurrentPlayer() { return this.players[this.activePlayerIndex]; }

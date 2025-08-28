@@ -25,9 +25,15 @@ export default class GameScene extends Phaser.Scene {
         this.raiseSlider = null;
         this.raiseAmountText = null;
 
-    // Global card size (adjust to fit the table)
-    this.cardWidth = 56;
-    this.cardHeight = 78;
+    // Base UI sizes (will be scaled for HD/4K)
+    this.baseCardWidth = 56;
+    this.baseCardHeight = 78;
+    this.cardWidth = this.baseCardWidth;
+    this.cardHeight = this.baseCardHeight;
+    this.baseFont = { small: 12, medium: 14, large: 16, phase: 18, winner: 24 };
+    this.baseButton = { w: 70, h: 40, spacing: 68 };
+    this.baseSlider = { width: 150, handleRadius: 8 };
+    this.uiScale = 1;
 
         this.aiPlayers = [
             null, // Human player
@@ -49,23 +55,27 @@ export default class GameScene extends Phaser.Scene {
         this.createUI();
         this.createActionButtons();
         this.createRaiseSlider();
-        this.updateGameDisplay();
+    this.updateUIScale();
+    this.updateGameDisplay();
+    // Recompute UI scale when the game resizes
+    this.scale.on('resize', () => this.updateUIScale());
         if (this.pokerGame.activePlayerIndex !== 0) {
             this.time.delayedCall(1500, () => this.handleAITurns());
         }
     }
 
     createPokerTable(width, height) {
-        this.add.rectangle(width / 2, height / 2, width, height, 0x0d4d3c);
-        const tableGraphics = this.add.graphics();
-        tableGraphics.fillStyle(0x000000, 0.3).fillEllipse(width / 2 + 5, height / 2 + 5, width * 0.85, height * 0.6);
-        tableGraphics.fillStyle(0x1b5e20).fillEllipse(width / 2, height / 2, width * 0.85, height * 0.6);
-        tableGraphics.lineStyle(4, 0x2e7d32).strokeEllipse(width / 2, height / 2, width * 0.85, height * 0.6);
-        tableGraphics.lineStyle(1, 0x388e3c).strokeEllipse(width / 2, height / 2, width * 0.8, height * 0.55);
-        const cardAreaWidth = 380;
-        const cardAreaHeight = 90;
-        tableGraphics.fillStyle(0x2e7d32).fillRoundedRect(width / 2 - cardAreaWidth / 2, height / 2 - cardAreaHeight / 2, cardAreaWidth, cardAreaHeight, 10);
-        tableGraphics.lineStyle(2, 0x4caf50).strokeRoundedRect(width / 2 - cardAreaWidth / 2, height / 2 - cardAreaHeight / 2, cardAreaWidth, cardAreaHeight, 10);
+            // use custom table background image if available
+            const bg = this.add.image(width / 2, height / 2, 'table').setOrigin(0.5).setDepth(0);
+            // scale the table image to cover the canvas while preserving aspect
+            try {
+                bg.setDisplaySize(width, height);
+            } catch (e) {
+                // fallback to solid color if image not available
+                this.add.rectangle(width / 2, height / 2, width, height, 0x0d4d3c).setDepth(0);
+            }
+    const tableGraphics = this.add.graphics();
+    // (center overlay removed - show only background image)
     }
 
     // Load card PNGs from a local assets folder instead of generating textures at runtime.
@@ -73,6 +83,8 @@ export default class GameScene extends Phaser.Scene {
     // Filenames follow the repo pattern: e.g. `2_of_clubs.png`, `jack_of_clubs.png`, `ace_of_spades.png`, and `back.png`.
     loadCardImages() {
     const basePath = 'cards/'; // relative to index.html / public/
+            // load the table background placed in public/table.png
+            this.load.image('table', 'table.png');
     // Detect high-DPI and choose the appropriate back image (back@2x.png exists in the folder)
     const isHiDPI = (typeof window !== 'undefined' && window.devicePixelRatio && window.devicePixelRatio > 1);
     this.cardBackScaleFactor = isHiDPI ? 0.5 : 1; // when loading @2x image we must scale it down by 0.5 to match layout
@@ -109,8 +121,8 @@ export default class GameScene extends Phaser.Scene {
     createCardContainer(x, y, textureKey, scale = 1) {
         const container = this.add.container(x, y);
 
-        const width = this.cardWidth;
-        const height = this.cardHeight;
+    const width = this.cardWidth;
+    const height = this.cardHeight;
 
         // Background rectangle (rounded) behind the card image
         const bg = this.add.graphics();
@@ -122,7 +134,7 @@ export default class GameScene extends Phaser.Scene {
 
         // Card image centered on container; use setDisplaySize so it fits the bg
         const img = this.add.image(0, 0, textureKey).setOrigin(0.5);
-        img.setDisplaySize(width * scale, height * scale);
+    img.setDisplaySize(width * scale, height * scale);
 
         container.add([bg, img]);
 
@@ -131,6 +143,47 @@ export default class GameScene extends Phaser.Scene {
         container.cardHeight = height;
 
         return container;
+    }
+
+    // Responsive UI scaling based on current canvas size and resolution
+    updateUIScale() {
+        const cam = this.cameras.main;
+        const logicalW = cam.width;
+        const logicalH = cam.height;
+        // scale factor relative to base design (393x852)
+        const baseW = 393, baseH = 852;
+        const scale = Math.min(logicalW / baseW, logicalH / baseH);
+        this.uiScale = Phaser.Math.Clamp(scale, 0.6, 4);
+
+        // Update card sizes
+        this.cardWidth = Math.round(this.baseCardWidth * this.uiScale);
+        this.cardHeight = Math.round(this.baseCardHeight * this.uiScale);
+
+        // Update fonts
+        if (this.phaseText) this.phaseText.setFontSize(Math.round(this.baseFont.phase * this.uiScale));
+        if (this.potText) this.potText.setFontSize(Math.round(this.baseFont.medium * this.uiScale));
+        if (this.winnerText) this.winnerText.setFontSize(Math.round(this.baseFont.winner * this.uiScale));
+        if (this.handRankText) this.handRankText.setFontSize(Math.round(this.baseFont.medium * this.uiScale));
+
+        // Update action buttons sizes and text
+        if (this.actionButtons && this.actionButtons.length) {
+            const spacing = Math.round(this.baseButton.spacing * this.uiScale);
+            this.actionButtons.forEach(btn => {
+                btn.button.width = Math.round(this.baseButton.w * this.uiScale);
+                btn.button.height = Math.round(this.baseButton.h * this.uiScale);
+                btn.text.setFontSize(Math.round(this.baseFont.small * this.uiScale));
+            });
+            // reposition controls after size change
+            this.positionControls();
+        }
+
+        // Update slider sizes
+        if (this.raiseSlider && this.raiseSlider.track) {
+            this.raiseSlider.track.width = Math.round(this.baseSlider.width * this.uiScale);
+            this.raiseSlider.handle.radius = Math.max(6, Math.round(this.baseSlider.handleRadius * this.uiScale));
+            // recreate visuals if needed
+            this.positionControls();
+        }
     }
 
     // Given a container or image, return the inner image GameObject (or the object itself if image)
@@ -148,12 +201,12 @@ export default class GameScene extends Phaser.Scene {
 
     createUI() {
         const { width, height } = this.cameras.main;
-        this.phaseText = this.add.text(width / 2, 30, '', { fontSize: '18px', fontFamily: 'Arial', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
-        this.potText = this.add.text(width / 2, height * 0.38, '', { fontSize: '16px', fontFamily: 'Arial', fill: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
-        this.winnerText = this.add.text(width / 2, height / 2, '', { fontSize: '24px', fontFamily: 'Arial', fill: '#ffeb3b', fontStyle: 'bold', align: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: { x: 20, y: 10 }, lineSpacing: 8 }).setOrigin(0.5).setDepth(100).setVisible(false);
+    this.phaseText = this.add.text(width / 2, 30, '', { fontSize: `${Math.round(this.baseFont.phase * this.uiScale)}px`, fontFamily: 'Arial', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+    this.potText = this.add.text(width / 2, height * 0.38, '', { fontSize: `${Math.round(this.baseFont.medium * this.uiScale)}px`, fontFamily: 'Arial', fill: '#ffd700', fontStyle: 'bold' }).setOrigin(0.5);
+    this.winnerText = this.add.text(width / 2, height / 2, '', { fontSize: `${Math.round(this.baseFont.winner * this.uiScale)}px`, fontFamily: 'Arial', fill: '#ffeb3b', fontStyle: 'bold', align: 'center', backgroundColor: 'rgba(0,0,0,0.7)', padding: { x: 20, y: 10 }, lineSpacing: 8 }).setOrigin(0.5).setDepth(100).setVisible(false);
         
-        // NEW: Initialize the hand rank text
-        this.handRankText = this.add.text(width / 2, height - 200, '', { fontSize: '16px', fontFamily: 'Arial', fill: '#fff', fontStyle: 'italic' }).setOrigin(0.5);
+    // NEW: Initialize the hand rank text
+    this.handRankText = this.add.text(width / 2, height - 200, '', { fontSize: `${Math.round(this.baseFont.medium * this.uiScale)}px`, fontFamily: 'Arial', fill: '#fff', fontStyle: 'italic' }).setOrigin(0.5);
 
         this.communityCardsGroup = this.add.group();
         this.playerCardsGroup = this.add.group();
@@ -177,11 +230,12 @@ export default class GameScene extends Phaser.Scene {
     
     createRaiseSlider() {
     const { width } = this.cameras.main;
-    const sliderX = width / 2, sliderWidth = 150;
+    const sliderX = width / 2;
+    const sliderWidth = Math.round(this.baseSlider.width * this.uiScale);
     // create at y=0, positionControls will place them correctly
-    const track = this.add.rectangle(sliderX, 0, sliderWidth, 10, 0x000000, 0.5).setOrigin(0.5).setDepth(60);
-    const handle = this.add.circle(sliderX - sliderWidth / 2, 0, 8, 0xffffff).setInteractive({ draggable: true }).setDepth(61);
-    this.raiseAmountText = this.add.text(sliderX, -25, '', { fontSize: '14px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(62);
+    const track = this.add.rectangle(sliderX, 0, sliderWidth, Math.max(8, Math.round(10 * this.uiScale)), 0x000000, 0.5).setOrigin(0.5).setDepth(60);
+    const handle = this.add.circle(sliderX - sliderWidth / 2, 0, Math.max(6, Math.round(this.baseSlider.handleRadius * this.uiScale)), 0xffffff).setInteractive({ draggable: true }).setDepth(61);
+    this.raiseAmountText = this.add.text(sliderX, -25, '', { fontSize: `${Math.round(this.baseFont.small * this.uiScale)}px`, fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5).setDepth(62);
 
         // Use the track's current position/width when dragging so layout changes won't break the math
         handle.on('drag', (p, dragX) => {
@@ -197,6 +251,8 @@ export default class GameScene extends Phaser.Scene {
             this.raiseAmountText.setText(`Raise to $${this.raiseSlider.value}`);
         });
 
+    // Place handle at left edge initially
+    handle.x = track.x - track.width / 2;
     this.raiseSlider = { track, handle, value: 0, setVisible: (v) => { track.setVisible(v); handle.setVisible(v); this.raiseAmountText.setVisible(v); this.positionControls(); }};
         this.raiseSlider.setVisible(false);
     // position after creation
@@ -214,8 +270,10 @@ export default class GameScene extends Phaser.Scene {
             { action: ACTIONS.BET, text: 'BET', color: 0xf57c00 }
         ];
         this.actionButtons = actions.map(actionData => {
-            const button = this.add.rectangle(0, 0, 70, 40, actionData.color).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true }).setDepth(70);
-            const text = this.add.text(0, 0, actionData.text, { fontSize: '12px', fill: '#fff', fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setDepth(71);
+            const btnW = Math.round(this.baseButton.w * this.uiScale);
+            const btnH = Math.round(this.baseButton.h * this.uiScale);
+            const button = this.add.rectangle(0, 0, btnW, btnH, actionData.color).setStrokeStyle(2, 0xffffff, 0.7).setInteractive({ useHandCursor: true }).setDepth(70);
+            const text = this.add.text(0, 0, actionData.text, { fontSize: `${Math.round(this.baseFont.small * this.uiScale)}px`, fill: '#fff', fontStyle: 'bold', align: 'center' }).setOrigin(0.5).setDepth(71);
             button.on('pointerover', () => button.setAlpha(0.8));
             button.on('pointerout', () => button.setAlpha(1));
             button.on('pointerdown', () => this.tweens.add({ targets: [button, text], scale: 0.9, duration: 100, yoyo: true, onComplete: () => this.handlePlayerAction(actionData.action) }));
@@ -235,16 +293,16 @@ export default class GameScene extends Phaser.Scene {
     // compute bottom of player's card area
     const cardBottom = playerCardsY + (this.cardHeight * 0.9) / 2;
 
-    // sliderY: place below player's cards with a margin so it doesn't overlap
-    const sliderMargin = 16;
+    // sliderY: place below player's cards with a larger margin so it won't overlap
+    const sliderMargin = 48; // margin between card bottom and slider
     let sliderY = cardBottom + sliderMargin;
 
-    // ensure slider stays visible within viewport (not too close to bottom)
-    const maxSliderY = height - 90;
+    // allow slider to go closer to the bottom of the view but keep a small safe margin
+    const maxSliderY = height - 60;
     sliderY = Math.min(sliderY, maxSliderY);
 
-    // buttonsY: place below slider with a small gap
-    const buttonsY = sliderY + 46;
+    // buttonsY: place below slider with a moderate gap so buttons sit closer to the slider
+    const buttonsY = sliderY + 36;
 
         // update slider elements
         if (this.raiseSlider && this.raiseSlider.track) {
@@ -259,13 +317,14 @@ export default class GameScene extends Phaser.Scene {
             handle.y = sliderY;
             handle.x = Phaser.Math.Clamp(handle.x || left, left, right);
             this.raiseAmountText.x = track.x;
-            this.raiseAmountText.y = sliderY - 22;
+            // move the amount label a bit higher above the track but keep it close to the slider
+            this.raiseAmountText.y = sliderY - 20;
         }
 
-        // layout visible buttons horizontally centered at buttonsY
-        const visibleButtons = this.actionButtons.filter(b => b.button.visible);
-        const spacing = 80;
-        const totalWidth = (visibleButtons.length - 1) * spacing;
+    // layout visible buttons horizontally centered at buttonsY
+    const visibleButtons = this.actionButtons.filter(b => b.button.visible);
+    const spacing = Math.round(this.baseButton.spacing * this.uiScale);
+    const totalWidth = (visibleButtons.length - 1) * spacing;
         const startX = width / 2 - totalWidth / 2;
         visibleButtons.forEach((btn, i) => {
             const x = startX + i * spacing;
@@ -304,7 +363,7 @@ export default class GameScene extends Phaser.Scene {
 
     if (this.pokerGame.activePlayerIndex === 0 || this.pokerGame.phase === GAME_PHASES.SHOWDOWN || this.pokerGame.phase === GAME_PHASES.GAME_OVER) {
             // If it's the human player's turn and autoPlay is enabled, perform a default action
-            if (this.pokerGame.activePlayerIndex === 0 && this.autoPlay && this.pokerGame.phase < GAME_PHASES.SHOWDOWN) {
+            if (this.pokerGame.activePlayerIndex === 0 && this.autoPlay && (this.pokerGame.phase !== GAME_PHASES.SHOWDOWN && this.pokerGame.phase !== GAME_PHASES.GAME_OVER)) {
                 const available = this.pokerGame.getPlayerActions();
                 // Prefer CALL, then CHECK, then RAISE (minRaise), else FOLD
                 let actionToDo = null;
@@ -405,7 +464,7 @@ export default class GameScene extends Phaser.Scene {
         this.playerTexts.forEach((text, index) => {
             const player = this.pokerGame.players[index];
             if (!text || !player) return;
-            const isActive = index === this.pokerGame.activePlayerIndex && this.pokerGame.phase < GAME_PHASES.SHOWDOWN;
+            const isActive = index === this.pokerGame.activePlayerIndex && (this.pokerGame.phase !== GAME_PHASES.SHOWDOWN && this.pokerGame.phase !== GAME_PHASES.GAME_OVER);
             text.setText(`${player.isDealer ? '(D) ' : ''}${player.name}`);
             this.chipDisplays[index].setText(`$${player.chips}`);
             text.setAlpha(player.isFolded ? 0.5 : 1);
@@ -433,7 +492,7 @@ export default class GameScene extends Phaser.Scene {
     // NEW: Function to update the player's hand rank display
     updateHandRankText() {
         const player = this.pokerGame.players[0];
-        if (!player || !player.holeCards || player.holeCards.length < 2 || this.pokerGame.phase >= GAME_PHASES.SHOWDOWN) {
+        if (!player || !player.holeCards || player.holeCards.length < 2 || this.pokerGame.phase === GAME_PHASES.SHOWDOWN || this.pokerGame.phase === GAME_PHASES.GAME_OVER) {
             this.handRankText.setText('').setVisible(false);
             return;
         }

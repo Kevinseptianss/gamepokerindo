@@ -21,6 +21,16 @@ body {
     position: relative;
 }
 
+/* Make the Phaser canvas use full container size and enable font smoothing */
+canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  image-rendering: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 /* Prevent scrolling and zoom on mobile */
 html, body {
     position: fixed;
